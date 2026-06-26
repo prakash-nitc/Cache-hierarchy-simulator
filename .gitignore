@@ -1,0 +1,23 @@
+# Compiled binary
+/cachesim
+/cachesim.exe
+
+# Object files and build directory
+*.o
+build/
+
+# Large / raw traces — keep the golden tiny.trace, ignore everything else here.
+# Real Valgrind traces (traces/*.trace) and raw dumps can be hundreds of MB.
+traces/*.trace
+!traces/tiny.trace
+*.raw
+raw.trace
+
+# Generated reports are KEPT in git (they hold the headline numbers), so they
+# are intentionally not ignored.
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
