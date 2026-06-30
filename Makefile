@@ -33,7 +33,7 @@ $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
 
 run: $(TARGET)
-	./$(TARGET) --trace traces/tiny.trace
+	./$(TARGET) --trace traces/tiny.trace --l1-size 16 --l1-block 4 --addr-bits 8 --verbose
 
 clean:
 	rm -rf $(BUILDDIR) cachesim cachesim.exe
