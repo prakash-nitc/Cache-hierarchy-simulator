@@ -7,7 +7,8 @@ miss classification (the 3 C's), and AMAT across the hierarchy.
 The authoritative design lives in [docs/SPEC.md](docs/SPEC.md). Per-phase teaching
 notes live in [docs/phases/](docs/phases/).
 
-> **Build status:** Phase 0 (scaffold) complete — CLI + trace reader.
+> **Build status:** Phase 1 complete — one direct-mapped, read-only cache
+> (address decomposition + hit/miss counting).
 
 ---
 
@@ -40,21 +41,29 @@ mingw32-make clean  # remove build/ and the binary
 
 ## Run
 
+Run the golden trace through a direct-mapped 16 B / 4 B cache (SPEC §11):
+
 ```sh
-./cachesim --trace traces/tiny.trace
+./cachesim --trace traces/tiny.trace --l1-size 16 --l1-block 4 --addr-bits 8 --verbose
 ```
+
+Output ends with `accesses=6 hits=1 misses=5  hitRate=16.67% missRate=83.33%`.
 
 ### CLI flags (current)
 
 | Flag | Meaning |
 |------|---------|
 | `--trace <file>` | Path to a memory-access trace (required). |
-| `--limit N` | Echo at most `N` records (`0` = unlimited, the default). |
+| `--l1-size <bytes>` | Total cache capacity in bytes (required). |
+| `--l1-block <bytes>` | Block/line size in bytes, a power of two (required). |
+| `--addr-bits N` | Address width in bits (default 64; affects only the reported tag width). |
+| `--verbose` | Print the decode + HIT/MISS for each access. |
 | `--help`, `-h` | Show usage. |
 
-> The full cache-configuration flags (`--l1-size`, `--l1-assoc`, replacement / write
-> policies, `--classify-3c`, …) described in `docs/SPEC.md` §10 are added in later
-> phases as the corresponding features land.
+> Associativity / replacement policies (`--l1-assoc`, `--l1-repl`), write policies,
+> the L2 hierarchy, AMAT, and `--classify-3c` described in `docs/SPEC.md` §10 are
+> added in later phases as the corresponding features land. Phase 1 is read-only:
+> every data op (`L`/`S`/`M`) is modeled as a lookup and `I` lines are ignored.
 
 ---
 
