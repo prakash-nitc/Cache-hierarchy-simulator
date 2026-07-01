@@ -4,8 +4,10 @@ A configurable, multi-level (L1/L2) CPU cache simulator in **C++17**. It reads r
 memory-access traces and models cache organizations, replacement and write policies,
 miss classification (the 3 C's), and AMAT across the hierarchy.
 
-The authoritative design lives in [docs/SPEC.md](docs/SPEC.md). Per-phase teaching
-notes live in [docs/phases/](docs/phases/).
+The authoritative design lives in [docs/SPEC.md](docs/SPEC.md). The concrete
+architecture (layers, modules, design patterns, phase mapping) is distilled in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Per-phase teaching notes live in
+[docs/phases/](docs/phases/).
 
 > **Build status:** Phase 1 complete — one direct-mapped, read-only cache
 > (address decomposition + hit/miss counting).
