@@ -9,8 +9,8 @@ architecture (layers, modules, design patterns, phase mapping) is distilled in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Per-phase teaching notes live in
 [docs/phases/](docs/phases/).
 
-> **Build status:** Phase 1 complete — one direct-mapped, read-only cache
-> (address decomposition + hit/miss counting).
+> **Build status:** Phase 2 complete — set-/fully-associative caches with
+> pluggable LRU / FIFO / Random replacement (read-only).
 
 ---
 
@@ -51,6 +51,13 @@ Run the golden trace through a direct-mapped 16 B / 4 B cache (SPEC §11):
 
 Output ends with `accesses=6 hits=1 misses=5  hitRate=16.67% missRate=83.33%`.
 
+Compare replacement policies on the crafted divergence trace:
+
+```sh
+./cachesim --trace traces/lru_vs_fifo.trace --l1-size 8 --l1-block 4 --l1-assoc 2 --l1-repl lru   # 2 hits
+./cachesim --trace traces/lru_vs_fifo.trace --l1-size 8 --l1-block 4 --l1-assoc 2 --l1-repl fifo  # 1 hit
+```
+
 ### CLI flags (current)
 
 | Flag | Meaning |
@@ -58,14 +65,24 @@ Output ends with `accesses=6 hits=1 misses=5  hitRate=16.67% missRate=83.33%`.
 | `--trace <file>` | Path to a memory-access trace (required). |
 | `--l1-size <bytes>` | Total cache capacity in bytes (required). |
 | `--l1-block <bytes>` | Block/line size in bytes, a power of two (required). |
+| `--l1-assoc N\|full` | Ways per set: `1` = direct-mapped (default), `full` = fully-associative. |
+| `--l1-repl P` | Replacement policy: `lru` (default), `fifo`, `random`. |
 | `--addr-bits N` | Address width in bits (default 64; affects only the reported tag width). |
 | `--verbose` | Print the decode + HIT/MISS for each access. |
 | `--help`, `-h` | Show usage. |
 
-> Associativity / replacement policies (`--l1-assoc`, `--l1-repl`), write policies,
-> the L2 hierarchy, AMAT, and `--classify-3c` described in `docs/SPEC.md` §10 are
-> added in later phases as the corresponding features land. Phase 1 is read-only:
-> every data op (`L`/`S`/`M`) is modeled as a lookup and `I` lines are ignored.
+> Write policies, the L2 hierarchy, AMAT, and `--classify-3c` described in
+> `docs/SPEC.md` §10 are added in later phases as the corresponding features land.
+> Phases 1–2 are read-only: every data op (`L`/`S`/`M`) is modeled as a lookup and
+> `I` lines are ignored.
+
+### Bundled validation traces
+
+| Trace | Purpose |
+|-------|---------|
+| `traces/tiny.trace` | Golden test (SPEC §11): 1 hit / 5 misses on a 16 B direct-mapped cache. |
+| `traces/conflict.trace` | Blocks 0/4 ping-pong: 6 misses direct-mapped → 2 misses at 2-way. |
+| `traces/lru_vs_fifo.trace` | Hot-block pattern where LRU (2 hits) beats FIFO (1 hit). |
 
 ---
 
