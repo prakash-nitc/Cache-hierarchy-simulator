@@ -10,6 +10,8 @@ build/
 # Real Valgrind traces (traces/*.trace) and raw dumps can be hundreds of MB.
 traces/*.trace
 !traces/tiny.trace
+!traces/conflict.trace
+!traces/lru_vs_fifo.trace
 *.raw
 raw.trace
 

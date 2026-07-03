@@ -1,8 +1,9 @@
 // Cache Hierarchy Simulator — entry point.
 //
-// Phase 1: build one direct-mapped, read-only cache from the CLI, run a trace
-// through it, and report hit/miss stats. (Writes, associativity, hierarchy and
-// the 3 C's arrive in later phases.)
+// Phase 2: build one read-only cache of any associativity (direct-mapped to
+// fully-associative) with a pluggable replacement policy, run a trace through
+// it, and report hit/miss stats. (Writes, hierarchy and the 3 C's arrive in
+// later phases.)
 
 #include "cache.h"
 #include "config.h"
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -18,12 +20,16 @@ namespace {
 
 void usage(const char* prog) {
     std::cout
-        << "Cache Hierarchy Simulator (phase 1: direct-mapped, read-only)\n"
+        << "Cache Hierarchy Simulator (phase 2: associativity + replacement, read-only)\n"
         << "Usage: " << prog << " --trace <file> --l1-size <bytes> --l1-block <bytes>\n"
+        << "               [--l1-assoc N|full] [--l1-repl lru|fifo|random]\n"
         << "               [--addr-bits N] [--verbose]\n"
         << "  --trace <file>     memory-access trace (lackey or R/W form)   [required]\n"
         << "  --l1-size <bytes>  total cache capacity in bytes              [required]\n"
         << "  --l1-block <bytes> block/line size in bytes (power of two)    [required]\n"
+        << "  --l1-assoc N|full  ways per set: 1 = direct-mapped (default),\n"
+        << "                     'full' = fully-associative (assoc = size/block)\n"
+        << "  --l1-repl P        replacement policy: lru (default), fifo, random\n"
         << "  --addr-bits N      address width in bits (default 64)\n"
         << "  --verbose          print the decode + HIT/MISS for each access\n"
         << "  --help, -h         show this message\n";
@@ -33,7 +39,8 @@ void usage(const char* prog) {
 
 int main(int argc, char** argv) {
     std::string tracePath;
-    CacheConfig cfg;            // name="L1", assoc=1, addrWidth=64 by default
+    CacheConfig cfg;            // name="L1", assoc=1, repl=LRU, addrWidth=64 by default
+    std::string assocStr;       // may be "full"; resolved once size/block are known
     bool        haveSize  = false;
     bool        haveBlock = false;
     bool        verbose   = false;
@@ -57,6 +64,18 @@ int main(int argc, char** argv) {
         } else if (arg == "--l1-block") {
             cfg.blockSize = std::stoull(needVal("--l1-block"));
             haveBlock = true;
+        } else if (arg == "--l1-assoc") {
+            assocStr = needVal("--l1-assoc");
+        } else if (arg == "--l1-repl") {
+            std::string p = needVal("--l1-repl");
+            if      (p == "lru")    cfg.replacement = ReplacementType::LRU;
+            else if (p == "fifo")   cfg.replacement = ReplacementType::FIFO;
+            else if (p == "random") cfg.replacement = ReplacementType::Random;
+            else {
+                std::cerr << "error: --l1-repl must be lru, fifo or random (got '"
+                          << p << "')\n";
+                return 2;
+            }
         } else if (arg == "--addr-bits") {
             cfg.addrWidth = std::stoull(needVal("--addr-bits"));
         } else if (arg == "--verbose") {
@@ -77,25 +96,41 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // Resolve associativity now that size/block are known. "full" means one
+    // set holding every line: assoc = totalLines = size / block.
+    if (assocStr == "full") {
+        cfg.associativity = cfg.sizeBytes / cfg.blockSize;
+    } else if (!assocStr.empty()) {
+        cfg.associativity = std::stoull(assocStr);
+    }
+
     TraceReader reader(tracePath);
     if (!reader.ok()) {
         std::cerr << "error: cannot open trace file '" << tracePath << "'\n";
         return 1;
     }
 
-    Cache cache(cfg);   // may throw on bad geometry
+    // Construct up front so an impossible geometry (non-power-of-two block,
+    // size not divisible by block*assoc, ...) fails with a clear message.
+    std::unique_ptr<Cache> cache;
+    try {
+        cache.reset(new Cache(cfg));
+    } catch (const std::exception& e) {
+        std::cerr << "error: bad cache geometry: " << e.what() << "\n";
+        return 2;
+    }
 
     Access   a;
     uint64_t n = 0;
     while (reader.next(a)) {
-        // Phase 1 is read-only: every data op is modeled as a single lookup.
-        // Instruction fetches are ignored in this data-cache study.
+        // Phases 1-2 are read-only: every data op is modeled as a single
+        // lookup. Instruction fetches are ignored in this data-cache study.
         if (a.op == Op::Instr) continue;
 
-        bool hit = cache.access(a.addr, /*isWrite=*/false);
+        bool hit = cache->access(a.addr, /*isWrite=*/false);
 
         if (verbose) {
-            Cache::Decoded d = cache.decode(a.addr);
+            Cache::Decoded d = cache->decode(a.addr);
             std::cout << "#" << ++n
                       << " addr=0x" << std::hex << a.addr
                       << " blk=0x"  << d.blockAddr
@@ -105,6 +140,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    cache.report(std::cout);
+    cache->report(std::cout);
     return 0;
 }
