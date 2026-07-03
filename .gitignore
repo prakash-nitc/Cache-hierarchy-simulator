@@ -18,6 +18,9 @@ raw.trace
 # Generated reports are KEPT in git (they hold the headline numbers), so they
 # are intentionally not ignored.
 
+# Personal interview-prep material — never push to the public repo.
+docs/bible/
+
 # Editor / OS cruft
 .vscode/
 .idea/
