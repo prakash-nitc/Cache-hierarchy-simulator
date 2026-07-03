@@ -36,6 +36,8 @@ Cache::Cache(const CacheConfig& cfg) : cfg_(cfg) {
     // Allocate every frame up front; nothing allocates on the hot path.
     sets_.resize(numSets_);
     for (CacheSet& s : sets_) s.lines.resize(cfg_.associativity);
+
+    repl_ = makeReplacement(cfg_.replacement, numSets_, cfg_.associativity);
 }
 
 Cache::Decoded Cache::decode(uint64_t addr) const {
@@ -56,21 +58,30 @@ bool Cache::access(uint64_t addr, bool isWrite) {
     CacheSet& set = sets_[d.setIndex];
 
     // ---- search the set for a matching, valid frame (a hit) ----
-    for (CacheLine& line : set.lines) {
+    for (size_t w = 0; w < set.lines.size(); ++w) {
+        CacheLine& line = set.lines[w];
         if (line.valid && line.tag == d.tag) {
             stats_.hits++;
+            repl_->onAccess(d.setIndex, w);      // tell the policy this way was re-used
             return true;
         }
     }
 
-    // ---- miss ----
+    // ---- miss: install the block, evicting if the set is full ----
     stats_.misses++;
-    // Direct-mapped: exactly one frame per set, so the resident block (if any)
-    // is unconditionally replaced. Associativity + replacement arrive in Phase 2.
-    CacheLine& frame = set.lines[0];
+    size_t way = pickWay(set, d.setIndex);
+    CacheLine& frame = set.lines[way];
+    // (Phase 3 adds the dirty-victim write-back here, before overwriting.)
     frame.valid = true;
     frame.tag   = d.tag;
+    repl_->onInsert(d.setIndex, way);
     return false;
+}
+
+size_t Cache::pickWay(const CacheSet& set, uint64_t setIndex) {
+    for (size_t w = 0; w < set.lines.size(); ++w)    // prefer an empty frame
+        if (!set.lines[w].valid) return w;
+    return repl_->getVictim(static_cast<size_t>(setIndex));  // set full → ask the policy
 }
 
 void Cache::report(std::ostream& os) const {
@@ -81,7 +92,8 @@ void Cache::report(std::ostream& os) const {
        << ", size=" << cfg_.sizeBytes << "B"
        << ", block=" << cfg_.blockSize << "B"
        << ", sets="  << numSets_
-       << ", assoc=" << cfg_.associativity << ")\n";
+       << ", assoc=" << cfg_.associativity
+       << ", repl="  << replName(cfg_.replacement) << ")\n";
     os << "  bits: offset=" << offsetBits_
        << " index=" << indexBits_
        << " tag="   << tagBits_ << "\n";
