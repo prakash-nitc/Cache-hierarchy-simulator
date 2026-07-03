@@ -8,10 +8,14 @@
 #include <cstdint>
 #include <string>
 
+// Which line to evict when a set is full (SPEC section 5.3).
+enum class ReplacementType { LRU, FIFO, Random };
+
 struct CacheConfig {
-    std::string name          = "L1";  // label used in reports
-    uint64_t    sizeBytes     = 0;     // total data capacity in bytes
-    uint64_t    blockSize     = 0;     // bytes per block/line (power of two)
-    uint64_t    associativity = 1;     // ways per set; 1 == direct-mapped (Phase 1)
-    uint64_t    addrWidth     = 64;    // address width in bits (sets tagBits)
+    std::string     name          = "L1";  // label used in reports
+    uint64_t        sizeBytes     = 0;     // total data capacity in bytes
+    uint64_t        blockSize     = 0;     // bytes per block/line (power of two)
+    uint64_t        associativity = 1;     // ways per set; 1 == direct-mapped
+    ReplacementType replacement   = ReplacementType::LRU;
+    uint64_t        addrWidth     = 64;    // address width in bits (sets tagBits)
 };
