@@ -4,7 +4,10 @@
 #         mingw32-make clean      remove build artifacts
 
 CXX      := g++
-CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -Iinclude
+# -MMD -MP: emit a .d dependency file per object so editing a header rebuilds
+# every .cpp that includes it (without this, stale objects built against an
+# older class layout can link "successfully" and crash at runtime).
+CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -Iinclude -MMD -MP
 
 # Append .exe on Windows so the linker output and the Make target name agree
 # (otherwise Make never sees the target as "built" and relinks every time).
@@ -31,6 +34,9 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp | $(BUILDDIR)
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
+
+# Pull in the auto-generated header dependencies (absent on first build).
+-include $(OBJS:.o=.d)
 
 run: $(TARGET)
 	./$(TARGET) --trace traces/tiny.trace --l1-size 16 --l1-block 4 --addr-bits 8 --verbose
