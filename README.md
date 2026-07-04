@@ -9,8 +9,8 @@ architecture (layers, modules, design patterns, phase mapping) is distilled in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Per-phase teaching notes live in
 [docs/phases/](docs/phases/).
 
-> **Build status:** Phase 2 complete — set-/fully-associative caches with
-> pluggable LRU / FIFO / Random replacement (read-only).
+> **Build status:** Phase 3 complete — writes: dirty bits, write-back/write-through
+> × write-allocate/no-write-allocate, write-back counting, invariant checks.
 
 ---
 
@@ -67,14 +67,17 @@ Compare replacement policies on the crafted divergence trace:
 | `--l1-block <bytes>` | Block/line size in bytes, a power of two (required). |
 | `--l1-assoc N\|full` | Ways per set: `1` = direct-mapped (default), `full` = fully-associative. |
 | `--l1-repl P` | Replacement policy: `lru` (default), `fifo`, `random`. |
+| `--l1-write W` | Write-hit policy: `back` (default) or `through`. |
+| `--l1-alloc A` | Write-miss policy: `allocate` (default) or `no-allocate`. |
 | `--addr-bits N` | Address width in bits (default 64; affects only the reported tag width). |
 | `--verbose` | Print the decode + HIT/MISS for each access. |
 | `--help`, `-h` | Show usage. |
 
-> Write policies, the L2 hierarchy, AMAT, and `--classify-3c` described in
-> `docs/SPEC.md` §10 are added in later phases as the corresponding features land.
-> Phases 1–2 are read-only: every data op (`L`/`S`/`M`) is modeled as a lookup and
-> `I` lines are ignored.
+> The L2 hierarchy, AMAT, and `--classify-3c` described in `docs/SPEC.md` §10 are
+> added in later phases. `L` is a read, `S` a write; `M` is modeled as its load half
+> until the hierarchy phase expands it into load+store; `I` lines are ignored.
+> Every run ends with an invariant check (`hits+misses == accesses`, never
+> `dirty && !valid`) and a memory-traffic report.
 
 ### Bundled validation traces
 
@@ -83,6 +86,7 @@ Compare replacement policies on the crafted divergence trace:
 | `traces/tiny.trace` | Golden test (SPEC §11): 1 hit / 5 misses on a 16 B direct-mapped cache. |
 | `traces/conflict.trace` | Blocks 0/4 ping-pong: 6 misses direct-mapped → 2 misses at 2-way. |
 | `traces/lru_vs_fifo.trace` | Hot-block pattern where LRU (2 hits) beats FIFO (1 hit). |
+| `traces/write.trace` | Store miss/hit + dirty & clean evictions: validates all four write/alloc combos (e.g. write-back: 1 memory write vs write-through: 3). |
 
 ---
 
