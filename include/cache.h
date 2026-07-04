@@ -1,16 +1,19 @@
 #pragma once
-// Cache — a single read-only cache of any associativity (Phase 2).
+// Cache — a write-aware cache of any associativity (Phase 3).
 //
 // Responsibilities so far:
 //   * derive geometry (numSets, offset/index/tag bit widths) from the config;
 //   * decompose a byte address into (offset, set index, tag);
 //   * answer hit/miss for each access and tally Stats;
-//   * on a full set, evict the way chosen by the ReplacementPolicy (Strategy).
+//   * on a full set, evict the way chosen by the ReplacementPolicy (Strategy);
+//   * honor all four write/alloc combinations: dirty bits, write-back counting,
+//     write-through forwarding, write-around — traffic flows to the MemoryLevel
+//     below via the next pointer (SPEC sections 6.3, 7.3).
 //
-// Writes (dirty bits, write policies) and a next level down are introduced in
-// Phases 3-4 (SPEC sections 7.3, 6.3).
+// Chaining Cache->Cache (a real L2) arrives in Phase 4.
 
 #include "config.h"
+#include "memory.h"
 #include "replacement.h"
 #include "stats.h"
 
@@ -21,6 +24,7 @@
 
 struct CacheLine {     // one block frame (one "way")
     bool     valid = false;
+    bool     dirty = false;   // modified in cache, not yet written below (write-back)
     uint64_t tag   = 0;
 };
 
@@ -28,7 +32,7 @@ struct CacheSet {
     std::vector<CacheLine> lines;   // size == associativity (1 in Phase 1)
 };
 
-class Cache {
+class Cache : public MemoryLevel {
 public:
     // The three address fields plus the block address, for reporting/verbose.
     struct Decoded {
@@ -38,17 +42,24 @@ public:
         uint64_t tag;
     };
 
-    explicit Cache(const CacheConfig& cfg);
+    // `next` is the level below (Memory now; another Cache in Phase 4) and
+    // must outlive this Cache. It receives fetches, write-backs, forwarded
+    // and write-around stores.
+    Cache(const CacheConfig& cfg, MemoryLevel* next);
 
-    // Look up `addr`; returns true on a hit. `isWrite` is recorded in Stats but
-    // not yet specially handled — Phase 1 treats every access as a lookup.
-    bool access(uint64_t addr, bool isWrite);
+    // Perform a read (isWrite=false) or a store (isWrite=true).
+    // Returns true on a hit. Full control flow: SPEC section 6.3.
+    bool access(uint64_t addr, bool isWrite) override;
 
     // Split an address into offset / set index / tag using this cache's geometry.
     Decoded decode(uint64_t addr) const;
 
     // Print geometry + stats.
-    void report(std::ostream& os) const;
+    void report(std::ostream& os) const override;
+
+    // Verify structural invariants (SPEC section 15): hits+misses == accesses
+    // and no line is ever dirty while invalid. Prints any violation; true = OK.
+    bool checkInvariants(std::ostream& os) const;
 
     const Stats& stats() const { return stats_; }
     uint64_t numSets()    const { return numSets_; }
@@ -68,5 +79,6 @@ private:
     uint64_t                           tagBits_    = 0;
     std::vector<CacheSet>              sets_;
     std::unique_ptr<ReplacementPolicy> repl_;
+    MemoryLevel*                       next_ = nullptr;   // not owned
     Stats                              stats_;
 };

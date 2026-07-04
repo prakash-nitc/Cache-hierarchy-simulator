@@ -7,6 +7,7 @@
 
 #include "cache.h"
 #include "config.h"
+#include "memory.h"
 #include "trace_reader.h"
 
 #include <cstdint>
@@ -110,11 +111,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // The terminal level: stores forwarded by write-through, write-around and
+    // dirty write-backs all land here and are counted.
+    Memory mem;
+
     // Construct up front so an impossible geometry (non-power-of-two block,
     // size not divisible by block*assoc, ...) fails with a clear message.
     std::unique_ptr<Cache> cache;
     try {
-        cache.reset(new Cache(cfg));
+        cache.reset(new Cache(cfg, &mem));
     } catch (const std::exception& e) {
         std::cerr << "error: bad cache geometry: " << e.what() << "\n";
         return 2;
@@ -123,11 +128,13 @@ int main(int argc, char** argv) {
     Access   a;
     uint64_t n = 0;
     while (reader.next(a)) {
-        // Phases 1-2 are read-only: every data op is modeled as a single
-        // lookup. Instruction fetches are ignored in this data-cache study.
+        // Instruction fetches are ignored in this data-cache study. L is a
+        // read, S a write. M (load-then-store) is still modeled as its load
+        // half only — the expansion into two accesses is Phase 4's feed().
         if (a.op == Op::Instr) continue;
 
-        bool hit = cache->access(a.addr, /*isWrite=*/false);
+        bool isWrite = (a.op == Op::Write);
+        bool hit = cache->access(a.addr, isWrite);
 
         if (verbose) {
             Cache::Decoded d = cache->decode(a.addr);
@@ -141,5 +148,11 @@ int main(int argc, char** argv) {
     }
 
     cache->report(std::cout);
+    mem.report(std::cout);
+    if (!cache->checkInvariants(std::cerr)) {
+        std::cerr << "error: invariants violated — simulation results are unreliable\n";
+        return 1;
+    }
+    std::cout << "invariants: OK\n";
     return 0;
 }

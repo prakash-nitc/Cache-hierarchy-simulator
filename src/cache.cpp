@@ -16,7 +16,9 @@ bool isPow2(uint64_t x) { return x != 0 && (x & (x - 1)) == 0; }
 
 }  // namespace
 
-Cache::Cache(const CacheConfig& cfg) : cfg_(cfg) {
+Cache::Cache(const CacheConfig& cfg, MemoryLevel* next) : cfg_(cfg), next_(next) {
+    if (next_ == nullptr)
+        throw std::invalid_argument("cache requires a next level (memory or cache)");
     if (cfg_.blockSize == 0 || cfg_.associativity == 0 || cfg_.sizeBytes == 0)
         throw std::invalid_argument("cache size/block/associativity must be > 0");
     if (!isPow2(cfg_.blockSize))
@@ -63,19 +65,73 @@ bool Cache::access(uint64_t addr, bool isWrite) {
         if (line.valid && line.tag == d.tag) {
             stats_.hits++;
             repl_->onAccess(d.setIndex, w);      // tell the policy this way was re-used
+            if (isWrite) {
+                if (cfg_.writePolicy == WritePolicy::WriteThrough)
+                    next_->access(addr, /*isWrite=*/true);   // forward the store below
+                else
+                    line.dirty = true;           // write-back: defer until eviction
+            }
             return true;
         }
     }
 
-    // ---- miss: install the block, evicting if the set is full ----
+    // ---- miss ----
     stats_.misses++;
+
+    // Write-around: a store that misses under no-write-allocate goes straight
+    // below; nothing is cached and no frame changes.
+    if (isWrite && cfg_.allocPolicy == AllocPolicy::NoWriteAllocate) {
+        next_->access(addr, /*isWrite=*/true);
+        return false;
+    }
+
+    // Allocate path: read miss, or write miss with write-allocate.
+    next_->access(addr, /*isWrite=*/false);      // FETCH the block (a read from below)
+
     size_t way = pickWay(set, d.setIndex);
     CacheLine& frame = set.lines[way];
-    // (Phase 3 adds the dirty-victim write-back here, before overwriting.)
-    frame.valid = true;
+    if (frame.valid && frame.dirty && cfg_.writePolicy == WritePolicy::WriteBack) {
+        // Evicting a modified line: it is the only copy, so write it back.
+        // Rebuild the victim's byte address from its tag + this set's index —
+        // when the next level is a cache (Phase 4), the write-back must land
+        // in the victim's own set there, not this access's.
+        stats_.writebacks++;
+        uint64_t vBlock = (frame.tag << indexBits_) | d.setIndex;
+        uint64_t vAddr  = vBlock << offsetBits_;
+        next_->access(vAddr, /*isWrite=*/true);
+    }
+
+    frame.valid = true;                          // install the fetched block
     frame.tag   = d.tag;
+    if (isWrite) {
+        if (cfg_.writePolicy == WritePolicy::WriteThrough) {
+            frame.dirty = false;                 // below is current: line stays clean
+            next_->access(addr, /*isWrite=*/true);
+        } else {
+            frame.dirty = true;                  // write-back: new line starts dirty
+        }
+    } else {
+        frame.dirty = false;                     // a read fill is clean
+    }
     repl_->onInsert(d.setIndex, way);
     return false;
+}
+
+bool Cache::checkInvariants(std::ostream& os) const {
+    bool ok = true;
+    if (stats_.hits + stats_.misses != stats_.accesses) {
+        os << "INVARIANT VIOLATED: hits(" << stats_.hits << ") + misses("
+           << stats_.misses << ") != accesses(" << stats_.accesses << ")\n";
+        ok = false;
+    }
+    for (size_t s = 0; s < sets_.size(); ++s)
+        for (size_t w = 0; w < sets_[s].lines.size(); ++w)
+            if (sets_[s].lines[w].dirty && !sets_[s].lines[w].valid) {
+                os << "INVARIANT VIOLATED: line dirty && !valid at set "
+                   << s << " way " << w << "\n";
+                ok = false;
+            }
+    return ok;
 }
 
 size_t Cache::pickWay(const CacheSet& set, uint64_t setIndex) {
@@ -88,12 +144,16 @@ void Cache::report(std::ostream& os) const {
     const char* org = (cfg_.associativity == 1) ? "direct-mapped"
                     : (numSets_ == 1)            ? "fully-associative"
                                                  : "set-associative";
+    const char* wp = (cfg_.writePolicy == WritePolicy::WriteBack) ? "back" : "through";
+    const char* ap = (cfg_.allocPolicy == AllocPolicy::WriteAllocate) ? "allocate"
+                                                                      : "no-allocate";
     os << cfg_.name << " (" << org
        << ", size=" << cfg_.sizeBytes << "B"
        << ", block=" << cfg_.blockSize << "B"
        << ", sets="  << numSets_
        << ", assoc=" << cfg_.associativity
-       << ", repl="  << replName(cfg_.replacement) << ")\n";
+       << ", repl="  << replName(cfg_.replacement)
+       << ", write=" << wp << ", alloc=" << ap << ")\n";
     os << "  bits: offset=" << offsetBits_
        << " index=" << indexBits_
        << " tag="   << tagBits_ << "\n";
@@ -103,6 +163,9 @@ void Cache::report(std::ostream& os) const {
     os << "  accesses=" << stats_.accesses
        << " hits="   << stats_.hits
        << " misses=" << stats_.misses
+       << " (reads=" << stats_.reads
+       << " writes=" << stats_.writes
+       << " writebacks=" << stats_.writebacks << ")"
        << "  hitRate="  << stats_.hitRate()  * 100.0 << "%"
        << " missRate=" << stats_.missRate() * 100.0 << "%\n";
     os.flags(f);
