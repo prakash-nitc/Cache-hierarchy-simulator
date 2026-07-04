@@ -21,9 +21,10 @@ namespace {
 
 void usage(const char* prog) {
     std::cout
-        << "Cache Hierarchy Simulator (phase 2: associativity + replacement, read-only)\n"
+        << "Cache Hierarchy Simulator (phase 3: writes + all write/alloc policies)\n"
         << "Usage: " << prog << " --trace <file> --l1-size <bytes> --l1-block <bytes>\n"
         << "               [--l1-assoc N|full] [--l1-repl lru|fifo|random]\n"
+        << "               [--l1-write back|through] [--l1-alloc allocate|no-allocate]\n"
         << "               [--addr-bits N] [--verbose]\n"
         << "  --trace <file>     memory-access trace (lackey or R/W form)   [required]\n"
         << "  --l1-size <bytes>  total cache capacity in bytes              [required]\n"
@@ -31,6 +32,8 @@ void usage(const char* prog) {
         << "  --l1-assoc N|full  ways per set: 1 = direct-mapped (default),\n"
         << "                     'full' = fully-associative (assoc = size/block)\n"
         << "  --l1-repl P        replacement policy: lru (default), fifo, random\n"
+        << "  --l1-write W       write-hit policy: back (default) or through\n"
+        << "  --l1-alloc A       write-miss policy: allocate (default) or no-allocate\n"
         << "  --addr-bits N      address width in bits (default 64)\n"
         << "  --verbose          print the decode + HIT/MISS for each access\n"
         << "  --help, -h         show this message\n";
@@ -75,6 +78,24 @@ int main(int argc, char** argv) {
             else {
                 std::cerr << "error: --l1-repl must be lru, fifo or random (got '"
                           << p << "')\n";
+                return 2;
+            }
+        } else if (arg == "--l1-write") {
+            std::string w = needVal("--l1-write");
+            if      (w == "back")    cfg.writePolicy = WritePolicy::WriteBack;
+            else if (w == "through") cfg.writePolicy = WritePolicy::WriteThrough;
+            else {
+                std::cerr << "error: --l1-write must be back or through (got '"
+                          << w << "')\n";
+                return 2;
+            }
+        } else if (arg == "--l1-alloc") {
+            std::string al = needVal("--l1-alloc");
+            if      (al == "allocate")    cfg.allocPolicy = AllocPolicy::WriteAllocate;
+            else if (al == "no-allocate") cfg.allocPolicy = AllocPolicy::NoWriteAllocate;
+            else {
+                std::cerr << "error: --l1-alloc must be allocate or no-allocate (got '"
+                          << al << "')\n";
                 return 2;
             }
         } else if (arg == "--addr-bits") {

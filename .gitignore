@@ -12,6 +12,7 @@ traces/*.trace
 !traces/tiny.trace
 !traces/conflict.trace
 !traces/lru_vs_fifo.trace
+!traces/write.trace
 *.raw
 raw.trace
 
