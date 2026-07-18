@@ -16,6 +16,23 @@ bool isPow2(uint64_t x) { return x != 0 && (x & (x - 1)) == 0; }
 
 }  // namespace
 
+bool RefFACache::touch(uint64_t blockAddr) {
+    ++clock_;
+    auto it = lastUsed_.find(blockAddr);
+    if (it != lastUsed_.end()) {           // resident: refresh recency
+        it->second = clock_;
+        return true;
+    }
+    if (lastUsed_.size() >= capacity_) {   // full: evict the LRU block
+        auto victim = lastUsed_.begin();
+        for (auto i = lastUsed_.begin(); i != lastUsed_.end(); ++i)
+            if (i->second < victim->second) victim = i;
+        lastUsed_.erase(victim);
+    }
+    lastUsed_.emplace(blockAddr, clock_);
+    return false;
+}
+
 Cache::Cache(const CacheConfig& cfg, MemoryLevel* next) : cfg_(cfg), next_(next) {
     if (next_ == nullptr)
         throw std::invalid_argument("cache requires a next level (memory or cache)");
@@ -40,6 +57,29 @@ Cache::Cache(const CacheConfig& cfg, MemoryLevel* next) : cfg_(cfg), next_(next)
     for (CacheSet& s : sets_) s.lines.resize(cfg_.associativity);
 
     repl_ = makeReplacement(cfg_.replacement, numSets_, cfg_.associativity);
+
+    if (cfg_.classify3C) {
+        // The reference model has the SAME total capacity, organized as one
+        // fully-associative LRU set — that equality is what makes the
+        // capacity-vs-conflict verdict meaningful.
+        refFA_.reset(new RefFACache(
+            static_cast<size_t>(cfg_.sizeBytes / cfg_.blockSize)));
+    }
+}
+
+void Cache::classify(uint64_t blockAddr) {
+    if (!refFA_) return;                       // classification disabled
+
+    if (seen_.insert(blockAddr).second) {      // .second == true: first-ever touch
+        stats_.compulsory++;                   // would miss even in infinite cache
+        refFA_->touch(blockAddr);              // keep the reference model populated
+        return;
+    }
+    // Seen before: ask the equal-size fully-associative model.
+    if (refFA_->touch(blockAddr))
+        stats_.conflict++;                     // FA would have hit → blame associativity
+    else
+        stats_.capacity++;                     // FA misses too → blame total size
 }
 
 Cache::Decoded Cache::decode(uint64_t addr) const {
@@ -65,6 +105,7 @@ bool Cache::access(uint64_t addr, bool isWrite) {
         if (line.valid && line.tag == d.tag) {
             stats_.hits++;
             repl_->onAccess(d.setIndex, w);      // tell the policy this way was re-used
+            if (refFA_) refFA_->touch(d.blockAddr);   // keep reference LRU faithful
             if (isWrite) {
                 if (cfg_.writePolicy == WritePolicy::WriteThrough)
                     next_->access(addr, /*isWrite=*/true);   // forward the store below
@@ -77,6 +118,7 @@ bool Cache::access(uint64_t addr, bool isWrite) {
 
     // ---- miss ----
     stats_.misses++;
+    classify(d.blockAddr);                       // 3-C verdict (before any early-out)
 
     // Write-around: a store that misses under no-write-allocate goes straight
     // below; nothing is cached and no frame changes.
@@ -131,6 +173,19 @@ bool Cache::checkInvariants(std::ostream& os) const {
                    << s << " way " << w << "\n";
                 ok = false;
             }
+    if (cfg_.classify3C) {
+        uint64_t sum = stats_.compulsory + stats_.capacity + stats_.conflict;
+        if (sum != stats_.misses) {
+            os << "INVARIANT VIOLATED: compulsory+capacity+conflict (" << sum
+               << ") != misses (" << stats_.misses << ")\n";
+            ok = false;
+        }
+        if (stats_.compulsory != seen_.size()) {
+            os << "INVARIANT VIOLATED: compulsory (" << stats_.compulsory
+               << ") != distinct blocks touched (" << seen_.size() << ")\n";
+            ok = false;
+        }
+    }
     return ok;
 }
 
@@ -168,5 +223,9 @@ void Cache::report(std::ostream& os) const {
        << " writebacks=" << stats_.writebacks << ")"
        << "  hitRate="  << stats_.hitRate()  * 100.0 << "%"
        << " missRate=" << stats_.missRate() * 100.0 << "%\n";
+    if (cfg_.classify3C)
+        os << "  3C: compulsory=" << stats_.compulsory
+           << " capacity=" << stats_.capacity
+           << " conflict=" << stats_.conflict << "\n";
     os.flags(f);
 }

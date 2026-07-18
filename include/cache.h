@@ -19,8 +19,26 @@
 
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <ostream>
+
+// Equal-size fully-associative LRU shadow model for 3-C classification
+// (Hill & Smith method, SPEC section 5.5). Tracks only block addresses — no
+// data, no writes, no sets. touch() reports whether the block was resident
+// and updates recency (inserting/evicting as needed). It must be driven on
+// EVERY access of the real cache — hit or miss — or its LRU state drifts and
+// the capacity/conflict split becomes wrong.
+class RefFACache {
+public:
+    explicit RefFACache(size_t capacityLines) : capacity_(capacityLines) {}
+    bool touch(uint64_t blockAddr);
+private:
+    std::unordered_map<uint64_t, uint64_t> lastUsed_;   // blockAddr -> use clock
+    size_t   capacity_;                                 // lines == cache totalLines
+    uint64_t clock_ = 0;
+};
 
 struct CacheLine {     // one block frame (one "way")
     bool     valid = false;
@@ -73,6 +91,9 @@ private:
     // exists, otherwise the policy's victim.
     size_t pickWay(const CacheSet& set, uint64_t setIndex);
 
+    // Tag a miss as compulsory / capacity / conflict (no-op unless classify3C).
+    void classify(uint64_t blockAddr);
+
     CacheConfig                        cfg_;
     uint64_t                           numSets_    = 0;
     uint64_t                           offsetBits_ = 0;
@@ -82,4 +103,7 @@ private:
     std::unique_ptr<ReplacementPolicy> repl_;
     MemoryLevel*                       next_ = nullptr;   // not owned
     Stats                              stats_;
+    // 3-C support (allocated only when cfg.classify3C):
+    std::unique_ptr<RefFACache>        refFA_;            // equal-size FA LRU model
+    std::unordered_set<uint64_t>       seen_;             // every block ever touched
 };
