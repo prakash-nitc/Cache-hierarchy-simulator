@@ -26,7 +26,7 @@ void usage(const char* prog) {
         << "               [--l2-size <bytes> --l2-block <bytes>] [--l2-assoc N|full]\n"
         << "               [--l2-repl P] [--l2-write W] [--l2-alloc A]\n"
         << "               [--l1-hit C] [--l2-hit C] [--mem-time C]\n"
-        << "               [--addr-bits N] [--verbose]\n"
+        << "               [--classify-3c] [--addr-bits N] [--verbose]\n"
         << "  --trace <file>      memory-access trace (lackey or R/W form)  [required]\n"
         << "  --l1-size/-block    L1 capacity / block size in bytes         [required]\n"
         << "  --l1-assoc N|full   L1 ways per set (default 1 = direct-mapped)\n"
@@ -38,6 +38,7 @@ void usage(const char* prog) {
         << "  --l1-hit C          L1 hit time in cycles   (default 1)\n"
         << "  --l2-hit C          L2 hit time in cycles   (default 10)\n"
         << "  --mem-time C        memory access in cycles (default 100)\n"
+        << "  --classify-3c       tag every miss compulsory/capacity/conflict\n"
         << "  --addr-bits N       address width in bits (default 64)\n"
         << "  --verbose           echo every CPU access with its L1 decode\n"
         << "  --help, -h          show this message\n";
@@ -121,6 +122,7 @@ int main(int argc, char** argv) {
         else if (arg == "--l2-hit")    { l2.hitTime = std::stod(needVal(arg.c_str())); anyL2 = true; }
         else if (arg == "--mem-time")  { memTime = std::stod(needVal(arg.c_str())); }
         else if (arg == "--addr-bits") { l1.addrWidth = l2.addrWidth = std::stoull(needVal(arg.c_str())); }
+        else if (arg == "--classify-3c") { l1.classify3C = l2.classify3C = true; }
         else if (arg == "--verbose")   { verbose = true; }
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
