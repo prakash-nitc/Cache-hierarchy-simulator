@@ -9,8 +9,8 @@ architecture (layers, modules, design patterns, phase mapping) is distilled in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Per-phase teaching notes live in
 [docs/phases/](docs/phases/).
 
-> **Build status:** Phase 3 complete — writes: dirty bits, write-back/write-through
-> × write-allocate/no-write-allocate, write-back counting, invariant checks.
+> **Build status:** Phase 4 complete — two-level hierarchy (L1→L2→Memory),
+> M-op expansion, local vs global miss rates, AMAT.
 
 ---
 
@@ -69,15 +69,26 @@ Compare replacement policies on the crafted divergence trace:
 | `--l1-repl P` | Replacement policy: `lru` (default), `fifo`, `random`. |
 | `--l1-write W` | Write-hit policy: `back` (default) or `through`. |
 | `--l1-alloc A` | Write-miss policy: `allocate` (default) or `no-allocate`. |
+| `--l2-size <bytes>`, `--l2-block <bytes>` | Add an L2 with this capacity / block size. |
+| `--l2-assoc`, `--l2-repl`, `--l2-write`, `--l2-alloc` | L2 knobs, same values as the L1 forms. |
+| `--l1-hit C`, `--l2-hit C`, `--mem-time C` | Hit/access times in cycles for AMAT (defaults 1 / 10 / 100). |
 | `--addr-bits N` | Address width in bits (default 64; affects only the reported tag width). |
-| `--verbose` | Print the decode + HIT/MISS for each access. |
+| `--verbose` | Echo every CPU access with its L1 decode + HIT/MISS. |
 | `--help`, `-h` | Show usage. |
 
-> The L2 hierarchy, AMAT, and `--classify-3c` described in `docs/SPEC.md` §10 are
-> added in later phases. `L` is a read, `S` a write; `M` is modeled as its load half
-> until the hierarchy phase expands it into load+store; `I` lines are ignored.
-> Every run ends with an invariant check (`hits+misses == accesses`, never
-> `dirty && !valid`) and a memory-traffic report.
+Two-level example (the Phase 4 gate — `L2.accesses == L1.misses`, AMAT = 76.00):
+
+```sh
+./cachesim --trace traces/tiny.trace --l1-size 16 --l1-block 4 \
+           --l2-size 32 --l2-block 4 --l2-assoc 2 \
+           --l1-hit 1 --l2-hit 10 --mem-time 100 --addr-bits 8
+```
+
+> The 3-C miss classification (`--classify-3c`) described in `docs/SPEC.md` §10
+> arrives in Phase 5. `L` is a read, `S` a write, `M` expands into load + store;
+> `I` lines are ignored. Every run reports per-level local **and** global miss
+> rates, memory traffic, and AMAT, and ends with an invariant check
+> (`hits+misses == accesses`, never `dirty && !valid`).
 
 ### Bundled validation traces
 
