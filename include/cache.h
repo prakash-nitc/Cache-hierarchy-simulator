@@ -61,7 +61,8 @@ public:
     // and no line is ever dirty while invalid. Prints any violation; true = OK.
     bool checkInvariants(std::ostream& os) const;
 
-    const Stats& stats() const { return stats_; }
+    const Stats&       stats()  const { return stats_; }
+    const CacheConfig& config() const { return cfg_; }
     uint64_t numSets()    const { return numSets_; }
     uint64_t offsetBits() const { return offsetBits_; }
     uint64_t indexBits()  const { return indexBits_; }

@@ -28,5 +28,6 @@ struct CacheConfig {
     ReplacementType replacement   = ReplacementType::LRU;
     WritePolicy     writePolicy   = WritePolicy::WriteBack;      // common pairing
     AllocPolicy     allocPolicy   = AllocPolicy::WriteAllocate;  // with write-back
+    double          hitTime       = 1.0;   // cycles on a hit at this level (AMAT)
     uint64_t        addrWidth     = 64;    // address width in bits (sets tagBits)
 };
