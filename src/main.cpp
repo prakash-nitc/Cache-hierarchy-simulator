@@ -1,53 +1,85 @@
 // Cache Hierarchy Simulator — entry point.
 //
-// Phase 2: build one read-only cache of any associativity (direct-mapped to
-// fully-associative) with a pluggable replacement policy, run a trace through
-// it, and report hit/miss stats. (Writes, hierarchy and the 3 C's arrive in
-// later phases.)
+// Phase 4: a real hierarchy. The CLI builds L1 (and optionally L2), chains
+// them over Memory inside CacheHierarchy, expands M ops into load+store,
+// and reports per-level local/global miss rates plus AMAT.
 
-#include "cache.h"
 #include "config.h"
-#include "memory.h"
+#include "hierarchy.h"
 #include "trace_reader.h"
 
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
 void usage(const char* prog) {
     std::cout
-        << "Cache Hierarchy Simulator (phase 3: writes + all write/alloc policies)\n"
+        << "Cache Hierarchy Simulator (phase 4: L1 -> L2 -> memory + AMAT)\n"
         << "Usage: " << prog << " --trace <file> --l1-size <bytes> --l1-block <bytes>\n"
         << "               [--l1-assoc N|full] [--l1-repl lru|fifo|random]\n"
         << "               [--l1-write back|through] [--l1-alloc allocate|no-allocate]\n"
+        << "               [--l2-size <bytes> --l2-block <bytes>] [--l2-assoc N|full]\n"
+        << "               [--l2-repl P] [--l2-write W] [--l2-alloc A]\n"
+        << "               [--l1-hit C] [--l2-hit C] [--mem-time C]\n"
         << "               [--addr-bits N] [--verbose]\n"
-        << "  --trace <file>     memory-access trace (lackey or R/W form)   [required]\n"
-        << "  --l1-size <bytes>  total cache capacity in bytes              [required]\n"
-        << "  --l1-block <bytes> block/line size in bytes (power of two)    [required]\n"
-        << "  --l1-assoc N|full  ways per set: 1 = direct-mapped (default),\n"
-        << "                     'full' = fully-associative (assoc = size/block)\n"
-        << "  --l1-repl P        replacement policy: lru (default), fifo, random\n"
-        << "  --l1-write W       write-hit policy: back (default) or through\n"
-        << "  --l1-alloc A       write-miss policy: allocate (default) or no-allocate\n"
-        << "  --addr-bits N      address width in bits (default 64)\n"
-        << "  --verbose          print the decode + HIT/MISS for each access\n"
-        << "  --help, -h         show this message\n";
+        << "  --trace <file>      memory-access trace (lackey or R/W form)  [required]\n"
+        << "  --l1-size/-block    L1 capacity / block size in bytes         [required]\n"
+        << "  --l1-assoc N|full   L1 ways per set (default 1 = direct-mapped)\n"
+        << "  --l1-repl P         lru (default) | fifo | random\n"
+        << "  --l1-write W        back (default) | through\n"
+        << "  --l1-alloc A        allocate (default) | no-allocate\n"
+        << "  --l2-size/-block    add an L2 with this capacity / block size\n"
+        << "  --l2-assoc/repl/... L2 knobs, same values as the L1 forms\n"
+        << "  --l1-hit C          L1 hit time in cycles   (default 1)\n"
+        << "  --l2-hit C          L2 hit time in cycles   (default 10)\n"
+        << "  --mem-time C        memory access in cycles (default 100)\n"
+        << "  --addr-bits N       address width in bits (default 64)\n"
+        << "  --verbose           echo every CPU access with its L1 decode\n"
+        << "  --help, -h          show this message\n";
+}
+
+bool parseRepl(const std::string& v, ReplacementType& out) {
+    if (v == "lru")    { out = ReplacementType::LRU;    return true; }
+    if (v == "fifo")   { out = ReplacementType::FIFO;   return true; }
+    if (v == "random") { out = ReplacementType::Random; return true; }
+    return false;
+}
+
+bool parseWrite(const std::string& v, WritePolicy& out) {
+    if (v == "back")    { out = WritePolicy::WriteBack;    return true; }
+    if (v == "through") { out = WritePolicy::WriteThrough; return true; }
+    return false;
+}
+
+bool parseAlloc(const std::string& v, AllocPolicy& out) {
+    if (v == "allocate")    { out = AllocPolicy::WriteAllocate;   return true; }
+    if (v == "no-allocate") { out = AllocPolicy::NoWriteAllocate; return true; }
+    return false;
+}
+
+// Resolve an associativity argument ("4" or "full") once geometry is known.
+uint64_t resolveAssoc(const std::string& s, const CacheConfig& cfg) {
+    if (s == "full") return cfg.sizeBytes / cfg.blockSize;
+    return std::stoull(s);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string tracePath;
-    CacheConfig cfg;            // name="L1", assoc=1, repl=LRU, addrWidth=64 by default
-    std::string assocStr;       // may be "full"; resolved once size/block are known
-    bool        haveSize  = false;
-    bool        haveBlock = false;
-    bool        verbose   = false;
+    CacheConfig l1;  l1.name = "L1";  l1.hitTime = 1.0;
+    CacheConfig l2;  l2.name = "L2";  l2.hitTime = 10.0;
+    std::string l1AssocStr, l2AssocStr;
+    double      memTime   = 100.0;
+    bool        haveL1Size = false, haveL1Block = false;
+    bool        haveL2Size = false, haveL2Block = false;
+    bool        anyL2      = false;   // any --l2-* flag seen
+    bool        verbose    = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -59,72 +91,58 @@ int main(int argc, char** argv) {
             }
             return argv[++i];
         };
+        auto badValue = [&](const char* flag, const std::string& got,
+                            const char* valid) -> int {
+            std::cerr << "error: " << flag << " must be " << valid
+                      << " (got '" << got << "')\n";
+            return 2;
+        };
 
-        if (arg == "--trace") {
-            tracePath = needVal("--trace");
-        } else if (arg == "--l1-size") {
-            cfg.sizeBytes = std::stoull(needVal("--l1-size"));
-            haveSize = true;
-        } else if (arg == "--l1-block") {
-            cfg.blockSize = std::stoull(needVal("--l1-block"));
-            haveBlock = true;
-        } else if (arg == "--l1-assoc") {
-            assocStr = needVal("--l1-assoc");
-        } else if (arg == "--l1-repl") {
-            std::string p = needVal("--l1-repl");
-            if      (p == "lru")    cfg.replacement = ReplacementType::LRU;
-            else if (p == "fifo")   cfg.replacement = ReplacementType::FIFO;
-            else if (p == "random") cfg.replacement = ReplacementType::Random;
-            else {
-                std::cerr << "error: --l1-repl must be lru, fifo or random (got '"
-                          << p << "')\n";
-                return 2;
-            }
-        } else if (arg == "--l1-write") {
-            std::string w = needVal("--l1-write");
-            if      (w == "back")    cfg.writePolicy = WritePolicy::WriteBack;
-            else if (w == "through") cfg.writePolicy = WritePolicy::WriteThrough;
-            else {
-                std::cerr << "error: --l1-write must be back or through (got '"
-                          << w << "')\n";
-                return 2;
-            }
-        } else if (arg == "--l1-alloc") {
-            std::string al = needVal("--l1-alloc");
-            if      (al == "allocate")    cfg.allocPolicy = AllocPolicy::WriteAllocate;
-            else if (al == "no-allocate") cfg.allocPolicy = AllocPolicy::NoWriteAllocate;
-            else {
-                std::cerr << "error: --l1-alloc must be allocate or no-allocate (got '"
-                          << al << "')\n";
-                return 2;
-            }
-        } else if (arg == "--addr-bits") {
-            cfg.addrWidth = std::stoull(needVal("--addr-bits"));
-        } else if (arg == "--verbose") {
-            verbose = true;
-        } else if (arg == "--help" || arg == "-h") {
-            usage(argv[0]);
-            return 0;
-        } else {
+        if      (arg == "--trace")     { tracePath = needVal("--trace"); }
+        else if (arg == "--l1-size")   { l1.sizeBytes = std::stoull(needVal(arg.c_str())); haveL1Size = true; }
+        else if (arg == "--l1-block")  { l1.blockSize = std::stoull(needVal(arg.c_str())); haveL1Block = true; }
+        else if (arg == "--l1-assoc")  { l1AssocStr = needVal(arg.c_str()); }
+        else if (arg == "--l1-repl")   { std::string v = needVal(arg.c_str());
+            if (!parseRepl(v, l1.replacement))  return badValue("--l1-repl", v, "lru, fifo or random"); }
+        else if (arg == "--l1-write")  { std::string v = needVal(arg.c_str());
+            if (!parseWrite(v, l1.writePolicy)) return badValue("--l1-write", v, "back or through"); }
+        else if (arg == "--l1-alloc")  { std::string v = needVal(arg.c_str());
+            if (!parseAlloc(v, l1.allocPolicy)) return badValue("--l1-alloc", v, "allocate or no-allocate"); }
+        else if (arg == "--l2-size")   { l2.sizeBytes = std::stoull(needVal(arg.c_str())); haveL2Size = true; anyL2 = true; }
+        else if (arg == "--l2-block")  { l2.blockSize = std::stoull(needVal(arg.c_str())); haveL2Block = true; anyL2 = true; }
+        else if (arg == "--l2-assoc")  { l2AssocStr = needVal(arg.c_str()); anyL2 = true; }
+        else if (arg == "--l2-repl")   { std::string v = needVal(arg.c_str()); anyL2 = true;
+            if (!parseRepl(v, l2.replacement))  return badValue("--l2-repl", v, "lru, fifo or random"); }
+        else if (arg == "--l2-write")  { std::string v = needVal(arg.c_str()); anyL2 = true;
+            if (!parseWrite(v, l2.writePolicy)) return badValue("--l2-write", v, "back or through"); }
+        else if (arg == "--l2-alloc")  { std::string v = needVal(arg.c_str()); anyL2 = true;
+            if (!parseAlloc(v, l2.allocPolicy)) return badValue("--l2-alloc", v, "allocate or no-allocate"); }
+        else if (arg == "--l1-hit")    { l1.hitTime = std::stod(needVal(arg.c_str())); }
+        else if (arg == "--l2-hit")    { l2.hitTime = std::stod(needVal(arg.c_str())); anyL2 = true; }
+        else if (arg == "--mem-time")  { memTime = std::stod(needVal(arg.c_str())); }
+        else if (arg == "--addr-bits") { l1.addrWidth = l2.addrWidth = std::stoull(needVal(arg.c_str())); }
+        else if (arg == "--verbose")   { verbose = true; }
+        else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
+        else {
             std::cerr << "error: unknown option '" << arg << "'\n";
             usage(argv[0]);
             return 2;
         }
     }
 
-    if (tracePath.empty() || !haveSize || !haveBlock) {
+    if (tracePath.empty() || !haveL1Size || !haveL1Block) {
         std::cerr << "error: --trace, --l1-size and --l1-block are required\n";
         usage(argv[0]);
         return 2;
     }
-
-    // Resolve associativity now that size/block are known. "full" means one
-    // set holding every line: assoc = totalLines = size / block.
-    if (assocStr == "full") {
-        cfg.associativity = cfg.sizeBytes / cfg.blockSize;
-    } else if (!assocStr.empty()) {
-        cfg.associativity = std::stoull(assocStr);
+    if (anyL2 && (!haveL2Size || !haveL2Block)) {
+        std::cerr << "error: L2 flags given but --l2-size and --l2-block are required"
+                     " to enable an L2\n";
+        return 2;
     }
+
+    if (!l1AssocStr.empty()) l1.associativity = resolveAssoc(l1AssocStr, l1);
+    if (!l2AssocStr.empty()) l2.associativity = resolveAssoc(l2AssocStr, l2);
 
     TraceReader reader(tracePath);
     if (!reader.ok()) {
@@ -132,45 +150,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // The terminal level: stores forwarded by write-through, write-around and
-    // dirty write-backs all land here and are counted.
-    Memory mem;
+    std::vector<CacheConfig> cfgs;
+    cfgs.push_back(l1);
+    if (haveL2Size) cfgs.push_back(l2);
 
-    // Construct up front so an impossible geometry (non-power-of-two block,
-    // size not divisible by block*assoc, ...) fails with a clear message.
-    std::unique_ptr<Cache> cache;
+    std::unique_ptr<CacheHierarchy> hier;
     try {
-        cache.reset(new Cache(cfg, &mem));
+        hier.reset(new CacheHierarchy(cfgs, memTime));
     } catch (const std::exception& e) {
         std::cerr << "error: bad cache geometry: " << e.what() << "\n";
         return 2;
     }
 
-    Access   a;
-    uint64_t n = 0;
-    while (reader.next(a)) {
-        // Instruction fetches are ignored in this data-cache study. L is a
-        // read, S a write. M (load-then-store) is still modeled as its load
-        // half only — the expansion into two accesses is Phase 4's feed().
-        if (a.op == Op::Instr) continue;
+    Access a;
+    while (reader.next(a))
+        hier->feed(a, verbose ? &std::cout : nullptr);
 
-        bool isWrite = (a.op == Op::Write);
-        bool hit = cache->access(a.addr, isWrite);
-
-        if (verbose) {
-            Cache::Decoded d = cache->decode(a.addr);
-            std::cout << "#" << ++n
-                      << " addr=0x" << std::hex << a.addr
-                      << " blk=0x"  << d.blockAddr
-                      << " set="    << std::dec << d.setIndex
-                      << " tag=0x"  << std::hex << d.tag << std::dec
-                      << " -> "     << (hit ? "HIT" : "MISS") << "\n";
-        }
-    }
-
-    cache->report(std::cout);
-    mem.report(std::cout);
-    if (!cache->checkInvariants(std::cerr)) {
+    hier->reportAll(std::cout);
+    if (!hier->checkInvariants(std::cerr)) {
         std::cerr << "error: invariants violated — simulation results are unreliable\n";
         return 1;
     }
