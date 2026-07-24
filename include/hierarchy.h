@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <ostream>
+#include <string>
 #include <vector>
 
 class CacheHierarchy {
@@ -39,6 +40,10 @@ public:
 
     // Per-level reports (local + global miss rates), memory traffic, AMAT.
     void reportAll(std::ostream& os) const;
+
+    // Machine-readable stats blob for scripts/sweep.py: config + counters +
+    // rates per level, memory traffic, AMAT. One JSON object on one stream.
+    void reportJson(std::ostream& os, const std::string& tracePath) const;
 
     // Run every level's invariant checks; true = all OK.
     bool checkInvariants(std::ostream& os) const;

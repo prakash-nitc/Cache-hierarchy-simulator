@@ -80,6 +80,72 @@ void CacheHierarchy::reportAll(std::ostream& os) const {
     os.flags(f);
 }
 
+namespace {
+
+// Minimal JSON string escaping (backslashes in Windows paths, quotes).
+std::string jsonEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+const char* replStr(ReplacementType t) {
+    switch (t) {
+        case ReplacementType::LRU:    return "lru";
+        case ReplacementType::FIFO:   return "fifo";
+        case ReplacementType::Random: return "random";
+    }
+    return "?";
+}
+
+}  // namespace
+
+void CacheHierarchy::reportJson(std::ostream& os, const std::string& tracePath) const {
+    uint64_t total = levels_.front()->stats().accesses;
+
+    std::ios_base::fmtflags f = os.flags();
+    os.precision(10);
+    os << "{\"trace\":\"" << jsonEscape(tracePath) << "\",\"levels\":[";
+    for (size_t i = 0; i < levels_.size(); ++i) {
+        const Cache&       c   = *levels_[i];
+        const CacheConfig& cfg = c.config();
+        const Stats&       s   = c.stats();
+        double global = total ? double(s.misses) / double(total) : 0.0;
+        if (i) os << ",";
+        os << "{\"name\":\"" << cfg.name << "\""
+           << ",\"size\":" << cfg.sizeBytes
+           << ",\"block\":" << cfg.blockSize
+           << ",\"assoc\":" << cfg.associativity
+           << ",\"repl\":\"" << replStr(cfg.replacement) << "\""
+           << ",\"write\":\"" << (cfg.writePolicy == WritePolicy::WriteBack ? "back" : "through") << "\""
+           << ",\"alloc\":\"" << (cfg.allocPolicy == AllocPolicy::WriteAllocate ? "allocate" : "no-allocate") << "\""
+           << ",\"hitTime\":" << cfg.hitTime
+           << ",\"classify3c\":" << (cfg.classify3C ? "true" : "false")
+           << ",\"accesses\":" << s.accesses
+           << ",\"hits\":" << s.hits
+           << ",\"misses\":" << s.misses
+           << ",\"reads\":" << s.reads
+           << ",\"writes\":" << s.writes
+           << ",\"writebacks\":" << s.writebacks
+           << ",\"hitRate\":" << s.hitRate()
+           << ",\"missRate\":" << s.missRate()
+           << ",\"globalMissRate\":" << global
+           << ",\"compulsory\":" << s.compulsory
+           << ",\"capacity\":" << s.capacity
+           << ",\"conflict\":" << s.conflict
+           << "}";
+    }
+    os << "],\"memory\":{\"reads\":" << mem_.reads()
+       << ",\"writes\":" << mem_.writes() << "}"
+       << ",\"memTime\":" << memTime_
+       << ",\"amat\":" << computeAMAT()
+       << "}\n";
+    os.flags(f);
+}
+
 bool CacheHierarchy::checkInvariants(std::ostream& os) const {
     bool ok = true;
     for (const auto& c : levels_)

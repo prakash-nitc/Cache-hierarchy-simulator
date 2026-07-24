@@ -39,6 +39,8 @@ void usage(const char* prog) {
         << "  --l2-hit C          L2 hit time in cycles   (default 10)\n"
         << "  --mem-time C        memory access in cycles (default 100)\n"
         << "  --classify-3c       tag every miss compulsory/capacity/conflict\n"
+        << "  --json              print one machine-readable JSON stats object\n"
+        << "                      instead of the human report (for scripts/sweep.py)\n"
         << "  --addr-bits N       address width in bits (default 64)\n"
         << "  --verbose           echo every CPU access with its L1 decode\n"
         << "  --help, -h          show this message\n";
@@ -81,6 +83,7 @@ int main(int argc, char** argv) {
     bool        haveL2Size = false, haveL2Block = false;
     bool        anyL2      = false;   // any --l2-* flag seen
     bool        verbose    = false;
+    bool        jsonOut    = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -123,6 +126,7 @@ int main(int argc, char** argv) {
         else if (arg == "--mem-time")  { memTime = std::stod(needVal(arg.c_str())); }
         else if (arg == "--addr-bits") { l1.addrWidth = l2.addrWidth = std::stoull(needVal(arg.c_str())); }
         else if (arg == "--classify-3c") { l1.classify3C = l2.classify3C = true; }
+        else if (arg == "--json")      { jsonOut = true; }
         else if (arg == "--verbose")   { verbose = true; }
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else {
@@ -168,11 +172,13 @@ int main(int argc, char** argv) {
     while (reader.next(a))
         hier->feed(a, verbose ? &std::cout : nullptr);
 
-    hier->reportAll(std::cout);
+    if (jsonOut) hier->reportJson(std::cout, tracePath);
+    else         hier->reportAll(std::cout);
+
     if (!hier->checkInvariants(std::cerr)) {
         std::cerr << "error: invariants violated — simulation results are unreliable\n";
         return 1;
     }
-    std::cout << "invariants: OK\n";
+    if (!jsonOut) std::cout << "invariants: OK\n";
     return 0;
 }
