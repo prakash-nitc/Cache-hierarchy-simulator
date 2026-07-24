@@ -9,8 +9,8 @@ architecture (layers, modules, design patterns, phase mapping) is distilled in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Per-phase teaching notes live in
 [docs/phases/](docs/phases/).
 
-> **Build status:** Phase 5 complete — 3-C miss classification (compulsory /
-> capacity / conflict) via an equal-size fully-associative reference model.
+> **Build status:** Phase 6 complete — real workload traces, `--json` output,
+> the sweep harness, and the comparison report with measured findings.
 
 ---
 
@@ -73,6 +73,7 @@ Compare replacement policies on the crafted divergence trace:
 | `--l2-assoc`, `--l2-repl`, `--l2-write`, `--l2-alloc` | L2 knobs, same values as the L1 forms. |
 | `--l1-hit C`, `--l2-hit C`, `--mem-time C` | Hit/access times in cycles for AMAT (defaults 1 / 10 / 100). |
 | `--classify-3c` | Tag every miss compulsory/capacity/conflict (all levels; off by default — costs time and memory). |
+| `--json` | Emit one machine-readable JSON stats object instead of the human report (for `scripts/sweep.py`). |
 | `--addr-bits N` | Address width in bits (default 64; affects only the reported tag width). |
 | `--verbose` | Echo every CPU access with its L1 decode + HIT/MISS. |
 | `--help`, `-h` | Show usage. |
@@ -129,12 +130,35 @@ Example (`traces/tiny.trace`, the golden test from SPEC §11 — byte addresses
 
 ### Generating real traces
 
-On Linux with Valgrind (see SPEC §12; helper script arrives in Phase 6):
+**On Linux/macOS with Valgrind** — record any program's accesses:
 
 ```sh
-valgrind --tool=lackey --trace-mem=yes ./your_program 2> raw.trace
-grep -E '^[ ]?[LSM]' raw.trace > traces/program.trace   # drop I lines for a D-cache study
+./scripts/gen_trace.sh traces/gzip.trace gzip -9 somefile   # drops I lines for a D-cache study
 ```
+
+**Anywhere (no Valgrind needed)** — the self-instrumenting workload generator runs
+real algorithms and emits the actual virtual addresses they touch (SPEC §12 fallback):
+
+```sh
+mingw32-make traces     # builds tracegen, writes the 4 standard workloads (~2M accesses):
+                        #   matmul (mixed locality), listwalk (pointer chasing),
+                        #   seqscan (pure spatial), randscan (no locality)
+```
+
+Generated traces are gitignored (they can be large); regenerate them with the command above.
+
+### Experiment sweep & comparison report
+
+```sh
+python scripts/sweep.py   # 32 runs over the workloads -> reports/comparison.{csv,md}
+```
+
+The report ([reports/comparison.md](reports/comparison.md), committed) runs six
+single-variable experiments — associativity, block size, capacity, replacement,
+write policy, and a locality contrast — each with a table and a finding computed from
+the actual numbers. Headline result: **direct-mapped → 4-way L1 cuts matmul's miss
+rate 32.39% → 25.55% and AMAT by 20.5%**, attributed by the 3-C classifier entirely
+to conflict misses.
 
 ---
 
@@ -142,13 +166,18 @@ grep -E '^[ ]?[LSM]' raw.trace > traces/program.trace   # drop I lines for a D-c
 
 ```
 cache-sim/
-├── Makefile
+├── Makefile               # all | run | traces | clean
 ├── README.md
 ├── docs/
 │   ├── SPEC.md            # authoritative design
-│   └── phases/            # per-phase teaching notes
+│   ├── ARCHITECTURE.md    # layered design overview
+│   └── phases/            # per-phase teaching notes (phase-0 … phase-6)
 ├── include/               # public headers
 ├── src/                   # implementation
-├── traces/                # tiny.trace (golden) + generated traces (gitignored)
-└── reports/               # generated CSV / Markdown (kept in git)
+├── scripts/
+│   ├── tracegen.cpp       # self-instrumenting workload generator (no Valgrind needed)
+│   ├── gen_trace.sh       # Valgrind lackey wrapper (Linux/macOS)
+│   └── sweep.py           # config-grid runner → comparison report (stdlib only)
+├── traces/                # committed golden/gate traces + generated workloads (gitignored)
+└── reports/               # comparison.csv / comparison.md (kept in git)
 ```
