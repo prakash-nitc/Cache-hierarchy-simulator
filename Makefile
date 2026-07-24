@@ -22,7 +22,9 @@ BUILDDIR := build
 SRCS := $(wildcard $(SRCDIR)/*.cpp)
 OBJS := $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SRCS))
 
-.PHONY: all run clean
+TRACEGEN := tracegen$(EXE)
+
+.PHONY: all run clean traces
 
 all: $(TARGET)
 
@@ -41,5 +43,17 @@ $(BUILDDIR):
 run: $(TARGET)
 	./$(TARGET) --trace traces/tiny.trace --l1-size 16 --l1-block 4 --addr-bits 8 --verbose
 
+# Workload generator (SPEC section 12 fallback for machines without Valgrind).
+$(TRACEGEN): scripts/tracegen.cpp
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+# Generate the standard synthetic workload set used by scripts/sweep.py.
+traces: $(TRACEGEN)
+	./$(TRACEGEN) matmul 64            > traces/matmul.trace
+	./$(TRACEGEN) listwalk 4096 262144 > traces/listwalk.trace
+	./$(TRACEGEN) seqscan 65536 16     > traces/seqscan.trace
+	./$(TRACEGEN) randscan 65536 262144 > traces/randscan.trace
+	@wc -l traces/matmul.trace traces/listwalk.trace traces/seqscan.trace traces/randscan.trace
+
 clean:
-	rm -rf $(BUILDDIR) cachesim cachesim.exe
+	rm -rf $(BUILDDIR) cachesim cachesim.exe tracegen tracegen.exe tracegen.d

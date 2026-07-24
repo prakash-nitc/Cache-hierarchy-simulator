@@ -1,6 +1,9 @@
-# Compiled binary
+# Compiled binaries
 /cachesim
 /cachesim.exe
+/tracegen
+/tracegen.exe
+/tracegen.d
 
 # Object files and build directory
 *.o
